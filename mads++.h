@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include <cassert>
 #include <charconv>
 #include <cstdarg>
 
@@ -584,6 +585,7 @@ typedef struct tBinaryFile
 typedef struct tRaw
 {
 	bool			use;
+	bool			car;
 	int				old;
 } tRaw;
 

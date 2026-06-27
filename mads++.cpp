@@ -41,7 +41,7 @@ BYTE		margin = (BYTE)32;
 BYTE		obxFillValue = (BYTE)0xFF;
 
 unsigned int __link_stack_pointer_old, __link_stack_address_old, __link_proc_vars_adr_old;
-unsigned int __link_stack_pointer, __link_stack_address, __link_proc_vars_adr;
+unsigned int __link_stack_pointer, __link_stack_address, __link_proc_vars_adr, carsum;
 
 int bank, blok, proc_lokal, fill, proc_idx, anonymous_idx;
 int whi_idx, while_nr, ora_nr, test_nr, test_idx, sym_idx, org_ofset;
@@ -112,6 +112,7 @@ bool blocked = false;
 bool rel_used = false;
 bool put_used = false;
 bool exclude_proc = false;
+bool list_exclude_proc = false;
 bool mne_used = false;
 bool data_out = false;
 bool aray = false;
@@ -841,12 +842,19 @@ inline long long random(int range)
 
 inline void SetLength(string& x, int newSize)
 {
-	x.resize(newSize);
+	// Pascal SetLength with negative size clears the string; mirror that.
+	if (newSize < 0)
+		x.clear();
+	else
+		x.resize(newSize);
 }
 
 inline void SetLength(_strArray& par, int newSize)
 {
-	par.resize(newSize);
+	if (newSize < 0)
+		par.clear();
+	else
+		par.resize(newSize);
 }
 
 inline int High(const _strArray& par)
@@ -865,7 +873,7 @@ void skip_spaces(int &i, string &a)
 {
 	if (a.empty() == false)
 	{
-		while ((i <= a.length()) and (AllowWhiteSpaces.has(a[i])))
+		while ((i < static_cast<int>(a.length())) and (AllowWhiteSpaces.has(a[i])))
 		{
 			inc(i);
 		}
@@ -995,10 +1003,7 @@ static long long StrToInt(const string &a)
 
 static long long StrToInt(const char a)
 {
-	string x;
-	x[0] = a;
-	return StrToInt(x);
-
+	return StrToInt(string(1, a));
 }
 
 /**
@@ -1026,12 +1031,24 @@ void put_dst(const BYTE a)
 		BYTE v = obxFillValue;
 		while (::fill > 0)
 		{
+			if (raw.car) inc(carsum, v);
+
 			dotObjectFile.write(reinterpret_cast<char*>(&v), 1);
 			::fill--;
 		}
 	}
+
+	if (raw.car) inc(carsum, a);
+
 	t_buf[buf_i] = a;
 	++buf_i;
+
+	if (raw.use && !raw.car && buf_i > 15)
+	{
+		if (t_buf[0] == 'C' && t_buf[1] == 'A' && t_buf[2] == 'R' && t_buf[3] == 'T')
+			raw.car = true;
+	}
+
 	if (buf_i >= static_cast<int>(sizeof(t_buf.x)))
 		flush_dst();
 }
@@ -1191,7 +1208,10 @@ void warning(const BYTE warningNr, const string& str_error = "" )
 
 		if (warning_mes != warning_old)
 		{
-			cout << dye::light_aqua(warning_mes) << '\n';
+			if (warningNr == WARN_UNREFERENCED_PROCEDURE)
+				cout << dye::yellow(warning_mes) << '\n';
+			else
+				cout << dye::light_aqua(warning_mes) << '\n';
 			warning_old = warning_mes;
 		}
 	}
@@ -1206,7 +1226,7 @@ void saveToMAEHeaderFile(const int bank_nr, const char *title_and_type)
 {
 	const char active_type = title_and_type[0];
 	bool okay = false;
-	for (int i = static_cast<int>(t_mad.size()) - 1; i >= 0; --i)
+	for (int i = static_cast<int>(t_mad.size()) - 2; i >= 0; --i)
 	{
 		if (t_mad[i].bank == bank_nr)
 		{
@@ -1221,7 +1241,7 @@ void saveToMAEHeaderFile(const int bank_nr, const char *title_and_type)
 	if (okay)
 	{
 		dotMEAFile << '\n' << "; " << title_and_type << '\n';
-		for (int i = static_cast<int>(t_mad.size()) - 1; i >= 0; --i)
+		for (int i = static_cast<int>(t_mad.size()) - 2; i >= 0; --i)
 		{
 			if (t_mad[i].bank == bank_nr)
 			{
@@ -1274,11 +1294,23 @@ void DoTheEnd(const BYTE err)
 {
 	if (open_ok)
 	{
+		if (list_exclude_proc)
+		{
+			for (int a = 0; a < static_cast<int>(t_prc.size()) - 1; ++a)
+			{
+				if (!t_prc[a].used)
+					warning(WARN_UNREFERENCED_PROCEDURE, t_prc[a].name);
+			}
+		}
+
 		// Flush and close the binary output file
 		flush_dst();
 
 		const int output_size = static_cast<int>(dotObjectFile.tellp());		// Get the size of the .o
 		dotObjectFile.close();
+
+		if (carsum != 0)
+			cout << "cart_crc: " << Hex(carsum, 8) << '\n';
 
 		// Finish off the following
 		// - .lab file
@@ -1303,8 +1335,8 @@ void DoTheEnd(const BYTE err)
 
 		if ((output_size == 0) or (err > STATUS_ONLY_WARNINGS))
 		{
-			// If the output was empty or there was an error then remove the output file again
-			if (std::remove(filenameOBX.c_str()) == 0)
+			// If the output was empty or there was an error then remove the output file silently
+			if (std::remove(filenameOBX.c_str()) != 0)
 			{
 				if (not silent)
 				{
@@ -1347,7 +1379,7 @@ void DoTheEnd(const BYTE err)
 		{
 			// Check if there are any MADS header file entries for this bank
 			bool ok = false;
-			for (int a = static_cast<int>(t_mad.size()) - 1; a >= 0; --a)
+			for (int a = static_cast<int>(t_mad.size()) - 2; a >= 0; --a)
 			{
 				if (t_mad[a].bank == bank_nr)
 				{
@@ -1358,15 +1390,14 @@ void DoTheEnd(const BYTE err)
 
 			if (ok)
 			{
-				if (bank > 0)
+				if (bank_nr > 0)
 					dotMEAFile << '\n' << "lmb #" << bank_nr << "\t\t;BANK #" << bank_nr << '\n';
 
 				saveToMAEHeaderFile(bank_nr, "CONSTANTS");	// constants
 				saveToMAEHeaderFile(bank_nr, "VARIABLES");	// variables
 				saveToMAEHeaderFile(bank_nr, "PROCEDURES"); // procedures
-				dotMEAFile.close();
 			}
-		
+
 		}
 		dotMEAFile.close();
 	}
@@ -1387,11 +1418,11 @@ void DoTheEnd(const BYTE err)
 
 		hue::reset();
 
-		for (int b = static_cast<int>(::messages.size()) - 1; b >= 0; --b)
-		{
-			if (::messages[b].message == ::messages[a].message)
-				::messages[b].pass = 0xFF;
-		}
+		// Pascal's dedup loop was commented out — keep it that way:
+		// for (int b = static_cast<int>(::messages.size()) - 1; b >= 0; --b)
+		//   if (::messages[b].pass == ::messages[a].pass)
+		//     if (::messages[b].message == ::messages[a].message)
+		//       ::messages[b].pass = 0xFF;
 	}
 
 	if (not(silent) and (err == 2))
@@ -1579,7 +1610,7 @@ void save_dstW(const int a)
  */
 void save_nul(const int i) // only write down zeros
 {
-	for (int k = 0; k < i - 1; ++k)
+	for (int k = 0; k < i; ++k)
 		save_dst(0);
 }
 
@@ -1637,16 +1668,16 @@ void show_error(string &a, const int error_nr, string str_error = {})
 	// we remove signs #0 because they are probably some weird bushes
 	while (a.length() > 0 and a.find((char)0) != string::npos)
 	{
-		a.resize(a.find((char)0) - 1);
+		a.resize(a.find((char)0));
 	}
 
 	if (a.empty() == false and not(error_nr == MSG_CANT_OPEN_CREATE_FILE or error_nr == MSG_RESERVED_BLANK))
 	{
 		con = a;
 
-		if (not t_lin.empty())
+		if (static_cast<int>(t_lin.size()) > 1)
 		{
-			for (int i = 0; i < t_lin.size() - 1; ++i)
+			for (int i = 1; i < static_cast<int>(t_lin.size()) - 1; ++i)
 			{
 				con += "\\" + t_lin[i];
 			}
@@ -1714,9 +1745,7 @@ void show_error(string &a, const int error_nr, string str_error = {})
 
 void show_error(string& a, const int b, const char str_error)
 {
-	string err;
-	err[0] = str_error;
-	show_error(a, b, err);
+	show_error(a, b, string(1, str_error));
 }
 
 void justify()
@@ -1832,7 +1861,7 @@ int l_lab(const string &a)
 	// OK, if the found label has a code >=__id_param, or the current value BANK=0
 	// OK if the label found is from the current bank or zero bank (BNK=BANK | BNK=0)
 
-	for (int i = static_cast<int>(t_lab.size()) - 1; i >= 0; --i)
+	for (int i = static_cast<int>(t_lab.size()) - 2; i >= 0; --i)
 	{
 		if (t_lab[i].len == len && t_lab[i].name == x)
 		{
@@ -1840,7 +1869,7 @@ int l_lab(const string &a)
 			{
 				return i;
 			}
-			else if (set::of(bank, 0, eos).has(t_lab[i].bank))
+			else if (t_lab[i].bank == bank || t_lab[i].bank == 0)
 			{
 				return i;
 			}
@@ -1981,7 +2010,7 @@ void save_the_label(const string &label_name, const unsigned int addr, const int
 
 			if (proc == false && bank_nr < 256)
 			{
-				if (list_dotH && bank_nr == 0)
+				if (list_dotH && bank_nr == 0 && !label_name.empty() && !(label_name[0] >= '0' && label_name[0] <= '9'))
 				{
 					string tmp = label_name;
 					std::replace(tmp.begin(), tmp.end(), '.', '_');
@@ -2085,7 +2114,7 @@ void save_str(string &a, int offset, int size, int repeat, const unsigned int ad
  * \param symbol 
  * \param new_local 
  */
-void s_lab(const string &a, const unsigned int ad, const int ba, string old, const char symbol, bool new_local = false)
+void s_lab(const string &a, const unsigned int ad, const int ba, string &old, const char symbol, bool new_local = false)
 {
 	// check if there is no such label already
 	// because if it is, do not add a new item, just correct the old one
@@ -2172,7 +2201,7 @@ void s_lab(const string &a, const unsigned int ad, const int ba, string old, con
 	t_lab[x].block = blok;
 	t_lab[x].pass = pass;
 	t_lab[x].offset = org_ofset;
-	if (((blok > 0) or dotRELOC.use) and (symbol != '?') )
+	if ((blok > 0) or (dotRELOC.use and (symbol != '?')))
 		t_lab[x].rel = true;
 
 	save_the_label(a, ad, ba, symbol);
@@ -2187,7 +2216,7 @@ void s_lab(const string &a, const unsigned int ad, const int ba, string old, con
  * \param old 
  * \param new_local 
  */
-void save_lab(string a, const unsigned int ad, const int ba, const string &old, bool new_local = false)
+void save_lab(string &a, const unsigned int ad, const int ba, string &old, bool new_local = false)
 {
 	if (!a.empty())
 	{
@@ -2809,8 +2838,6 @@ BYTE get_type(int &i, string &zm, string &old, const bool tst, const bool err = 
 			error_und(old, txt, WARN_BAD_PARAMETER_TYPE);
 	}
 
-	if (err && AllowedTypeChars.has(result) == false) error_und(old, txt, WARN_BAD_PARAMETER_TYPE);
-
 	dec(result, __byteValue);
 
 	return result;
@@ -3173,7 +3200,10 @@ char OperExt(int &i, string &old, const char a, const char b, bool &value)
 
 	if (not(value) or (result == ' ') )
 	{
-		show_error(old, WARN_ILLEGAL_CHARACTER, static_cast<char>(a + b));
+		string ab;
+		ab += a;
+		ab += b;
+		show_error(old, WARN_ILLEGAL_CHARACTER, ab);
 	}
 
 	inc(i, 2);
@@ -3195,9 +3225,7 @@ char OperNew(int &i, string &old, const char a, bool &value, const bool b)
 {
 	if (value != b)
 	{
-		string txt;
-		txt[0] = a;
-		show_error(old, WARN_ILLEGAL_CHARACTER, txt);
+		show_error(old, WARN_ILLEGAL_CHARACTER, string(1, a));
 	}
 
 	++i;
@@ -3502,7 +3530,7 @@ string get_labelEx(int& i, string& a)
  * \param test
  * \return
  */
- int load_label_ofset(string& a, string old, const bool test)
+ int load_label_ofset(string& a, string &old, const bool test)
 {
 	int result;
 	if (a.empty()) show_error(old, ERROR_UNEXPECTED_EOL);
@@ -3553,6 +3581,33 @@ string read_DEC(int& idx, const string& src)
 		++idx;
 	}
 
+	return result;
+}
+
+string read_QUA(int& idx, const string& src, string& old)
+{
+	string result;
+	inc(idx);                                               // skip the first 'q' / 'Q'
+
+	unsigned int decimalValue = 0;
+
+	while (idx < src.length() && src[idx] >= '0' && src[idx] <= '3')
+	{
+		BYTE digit = static_cast<BYTE>(src[idx] - '0');
+		decimalValue = (decimalValue << 2) + digit;
+		result += src[idx];
+		++idx;
+	}
+
+	if (!(test_param(idx, src)))
+	{
+		if (result.empty())
+		{
+			show_error(old, WARN_ILLEGAL_CHARACTER, string(1, src[idx]));
+		}
+	}
+
+	result = IntToStr(decimalValue);
 	return result;
 }
 
@@ -3919,7 +3974,7 @@ void save_dtaS(string &in_war, int ile, BYTE typ, string &old)
 
 		typ = 1;
 
-		for (k = 0; k < war.length() - 1; ++k)
+		for (k = 0; k < static_cast<int>(war.length()); ++k)
 		{
 			string txt;
 			txt += ch;
@@ -4036,7 +4091,8 @@ void get_define_param(int &k, string &a, string &txt, const int num)
 		_strArray par;
 		get_parameters(idx, tmp, par, false);
 
-		for (idx = 0; idx <= par.size(); ++idx)
+		const int high_par = static_cast<int>(par.size()) - 1;
+		for (idx = 0; idx <= high_par; ++idx)
 		{
 			if (idx == 0)
 			{
@@ -4044,14 +4100,14 @@ void get_define_param(int &k, string &a, string &txt, const int num)
 				{
 					const int j = pos("%%0", txt);
 					myDelete(txt, j, 3);
-					myInsert (IntToStr(static_cast<int>(par.size())).c_str(), txt, j);
+					myInsert (IntToStr(high_par).c_str(), txt, j);
 				}
 
 				while (pos(":0", txt) >= 0)
 				{
 					const int j = pos(":0", txt);
 					myDelete(txt, j, 2);
-					myInsert(IntToStr(static_cast<int>(par.size())).c_str(), txt, j);
+					myInsert(IntToStr(high_par).c_str(), txt, j);
 				}
 			}
 			else
@@ -4073,7 +4129,7 @@ void get_define_param(int &k, string &a, string &txt, const int num)
 
 			}
 		}
-		if (num != par.size()) 
+		if (num != high_par)
 			show_error(a, WARN_IMPROPER_NR_OF_PARAMS);
 	}
 	else
@@ -4333,13 +4389,19 @@ LOOP:
 				if (value or ReadEnum)
 					show_error(old, ERROR_EXTRA_CHARS_ON_LINE);
 
-				if ((i < length(a)) and (UpCase(a[i + 1]) == 'X') and (a[i] == '0'))
+				if ((i < length(a)) and (UpCase(a[i + 1]) == 'Q') and (a[i] == '0'))
+				{
+					// 0q...
+					inc(i);
+					tmp = read_QUA(i, a, old);
+				}
+				else if ((i < length(a)) and (UpCase(a[i + 1]) == 'X') and (a[i] == '0'))
 				{
 					// 0x...
 					inc(i);
 					tmp = read_HEX(i, a, old);
 				}
-				else 
+				else
 				{
 					// 0..9
 					tmp = read_DEC(i, a);
@@ -4362,7 +4424,7 @@ LOOP:
 
 				x = tCRC16[byte(0xffff >> 8) ^ byte('.')] ^ (0xffff << 8);
 
-				while (_alpha(a[i]) and (i <= length(a)))
+				while ((i < length(a)) and _alpha(a[i]))
 				{
 					byt = UpCase(a[i]);    // !! uppercase !! because it won't work with the -c switch
 					x = tCRC16[byte(x >> 8) ^ byte(byt)] ^ (x << 8);
@@ -4391,7 +4453,7 @@ LOOP:
 
 						war = _rept_ile;
 						if (not(loop_used) and not(FOX_ripit))
-							t = " #" + Hex(cardinal(war), 2);    // save #number in LST file
+							t += " #" + Hex(cardinal(war), 2);    // save #number in LST file
 
 						value = true;
 						break;
@@ -4477,13 +4539,19 @@ LOOP:
 								war = t_get[arg];
 								break;
 							case _wget:
-								war = Int64(t_get[arg]) + Int64(t_get[arg + 1] << 8);
+								war = static_cast<long long>(t_get[arg])
+								    + (static_cast<long long>(t_get[arg + 1]) << 8);
 								break;
 							case _lget:
-								war = Int64(t_get[arg]) + Int64(t_get[arg + 1] << 8) + Int64(t_get[arg + 2] << 16);
+								war = static_cast<long long>(t_get[arg])
+								    + (static_cast<long long>(t_get[arg + 1]) << 8)
+								    + (static_cast<long long>(t_get[arg + 2]) << 16);
 								break;
 							case _dget:
-								war = Int64(t_get[arg]) + Int64(t_get[arg + 1] << 8) + Int64(t_get[arg + 2] << 16) + Int64(t_get[arg + 3] << 24);
+								war = static_cast<long long>(t_get[arg])
+								    + (static_cast<long long>(t_get[arg + 1]) << 8)
+								    + (static_cast<long long>(t_get[arg + 2]) << 16)
+								    + (static_cast<long long>(t_get[arg + 3]) << 24);
 								break;
 						}
 
@@ -5324,7 +5392,7 @@ LOOP:
 						{
 							if (tmp[ofset] == '1')
 							{
-								war = war + (1 << (k - ofset));
+								war = war + (1LL << (k - ofset));
 							}
 						}
 					}
@@ -5361,14 +5429,11 @@ LOOP:
 						war = (war << 8) + (ata2int(ord(tmp[2 - 1])));
 				}
 
-				if (i + 1 < a.length())
-				{
-					byt = a[i + 1];
+				byt = (i + 1 < static_cast<int>(a.length())) ? a[i + 1] : '\0';
 
-					if (not(_lab_firstEx(byt) or _dec(byt) or (byt == '$' or byt == '%')))
-					{
-						inc(war, test_string(i, a, 'F'));
-					}
+				if (not(_lab_firstEx(byt) or _dec(byt) or (byt == '$' or byt == '%')))
+				{
+					inc(war, test_string(i, a, 'F'));
 				}
 
 				value = true;
@@ -5600,12 +5665,14 @@ LOOP:
 						break;
 					}
 
-					case '=':   war = (war == iarg) ? 1 : 0; break;
-					case 'A':   war = (war != iarg) ? 1 : 0; break;
-					case 'B':   war = (war <= iarg) ? 1 : 0; break;
-					case '<':   war = (war < iarg) ? 1 : 0; break;
-					case 'C':   war = (war >= iarg) ? 1 : 0; break;
-					case '>':   war = (war > iarg) ? 1 : 0; break;
+					// Pascal truncates operands to 32-bit signed for relational ops:
+					//   '=': war := ord(integer(war) = integer(iarg));  etc.
+					case '=':   war = (static_cast<int32_t>(war) == static_cast<int32_t>(iarg)) ? 1 : 0; break;
+					case 'A':   war = (static_cast<int32_t>(war) != static_cast<int32_t>(iarg)) ? 1 : 0; break;
+					case 'B':   war = (static_cast<int32_t>(war) <= static_cast<int32_t>(iarg)) ? 1 : 0; break;
+					case '<':   war = (static_cast<int32_t>(war) <  static_cast<int32_t>(iarg)) ? 1 : 0; break;
+					case 'C':   war = (static_cast<int32_t>(war) >= static_cast<int32_t>(iarg)) ? 1 : 0; break;
+					case '>':   war = (static_cast<int32_t>(war) >  static_cast<int32_t>(iarg)) ? 1 : 0; break;
 					case 'D':   war = war << iarg; break;
 					case 'E':   war = war >> iarg; break;
 					case 'F':   war = (war != 0 and iarg != 0) ? 1 : 0; break;
@@ -6188,7 +6255,7 @@ void calculate_data(int &i, string &a, string &old, const BYTE typ)
 				if (_eol(a[i]))
 				{
 					terminateLoop = true;
-					break;
+					continue;          // Pascal: Break — skip the dta_used save_dta below
 				}
 
 				if (dotRELOC.use)
@@ -6423,6 +6490,7 @@ void test_skipa()
  */
 void addResult(int5 &hlp, int5& res)
 {
+	assert(res.l + hlp.l <= 256 && "addResult: int5.h overflow");
 	for (int i = 0; i < hlp.l; ++i)
 	{
 		res.h[res.l + i] = hlp.h[i];
@@ -6525,7 +6593,7 @@ BYTE adrMode(const string &a)
  * \param old 
  * \param tst 
  */
-void save_fake_label(string &ety, const string &old, const tCardinal tst)
+void save_fake_label(string &ety, string &old, const tCardinal tst)
 {
 	int war = load_lab(ety, false);        // we update the label value
 
@@ -6628,15 +6696,17 @@ string getByte(string &pom, const BYTE ile, const char ch)
  */
 int5 calculate_mnemonic(int& i, string& a, string& old)
 {
-	int j, m, idx, len;
+	// Locals zero-initialised to match Free Pascal's default-init for local vars,
+	// avoids /RTC1 uninit reads on rare paths (e.g. branch-range fallback in __jskip).
+	int j = 0, m = 0, idx = 0, len = 0;
 	string     op_, mnemo, mnemo_tmp, zm, tmp, str, pom, add;
-	tInt64    war, war_roz, help;
-	tByte    code, ile, k, byt;
-	char    op, siz;
-	bool    test, increase, incdec, mvnmvp, pomin, opty, isvar;
-	bool    branch_run, old_run_macro;
-	tCardinal    tryb;
-	int5    hlp;
+	tInt64    war = 0, war_roz = 0, help = 0;
+	tByte    code = 0, ile = 0, k = 0, byt = 0;
+	char    op = ' ', siz = ' ';
+	bool    test = false, increase = false, incdec = false, mvnmvp = false, pomin = false, opty = false, isvar = false;
+	bool    branch_run = false, old_run_macro = false;
+	tCardinal    tryb = 0;
+	int5    hlp = {};
 	_strArray    par;	// 0 index
 
 	int5 Result = {};
@@ -7370,12 +7440,10 @@ int5 calculate_mnemonic(int& i, string& a, string& old)
 							else
 							{
 								// $C8 = INY
-								if (Result.h[Result.l - 1] != 0xc8)
-								{
-									pom = "iny";                     // only this way via ASM_MNEMO
-									hlp = asm_mnemo(pom, old);       // otherwise there will be no relocation
-									addResult(hlp, Result);
-								}
+								// if (Result.h[Result.l - 1] != 0xc8)  // Pascal guard intentionally disabled
+								pom = "iny";                     // only this way via ASM_MNEMO
+								hlp = asm_mnemo(pom, old);       // otherwise there will be no relocation
+								addResult(hlp, Result);
 
 								test = true;
 							}
@@ -7739,7 +7807,7 @@ int5 calculate_mnemonic(int& i, string& a, string& old)
 	// from now on the variable K stores the instruction number!!! //
 	//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!//
 
-	if (k < 94 and (opt & opt_C))
+	if ((opt & opt_C) != 0)
 	{
 		code = m65816[k].kod;           // machine codes 65816 are in the range <0..91>
 		tryb = m65816[k].ads;           // mnemonic machine code in first addressing 65816
@@ -7759,16 +7827,8 @@ int5 calculate_mnemonic(int& i, string& a, string& old)
 	}
 	else
 	{
-		if (k >= (sizeof(m6502) / sizeof(t_ads)))
-		{
-			code = 0;
-			tryb = 0;
-		}
-		else
-		{
-			code = m6502[k].kod;           // machine codes 6502 are in the range <0..55>
-			tryb = m6502[k].ads;           // mnemonic machine code in first addressing 6502
-		}
+		code = m6502[k].kod;           // machine codes 6502 are in the range <0..55>
+		tryb = m6502[k].ads;           // mnemonic machine code in first addressing 6502
 	}
 
 
@@ -7800,9 +7860,10 @@ int5 calculate_mnemonic(int& i, string& a, string& old)
 	// skip the spaces and go to the argument
 	skip_spaces(i, a);
 
-	if (_lab_first(a[i]))
+	if (_lab_first(a[i]) and (a[i + 1] != ':'))
 	{
 		// check if the label ends with ':'
+		// a: z: r: are reserved for mnemonic extensions
 		j = i;
 		tmp = get_lab(i, a, false);
 
@@ -8156,7 +8217,7 @@ int5 calculate_mnemonic(int& i, string& a, string& old)
 
 		war = war - 2 - addres;
 
-		if (j > 0 and tryb and (maska[j-1] == 2))
+		if (j > 0 and ((tryb & maska[j-1]) == 2))
 		{
 			idx = 128;
 		}
@@ -8357,7 +8418,7 @@ int5 calculate_mnemonic(int& i, string& a, string& old)
 		ile = 0;
 		for (int index = 7; index >= 0; --index)
 		{
-			if (((tryb >> 24) and maska[index] > 0))
+			if (((tryb >> 24) & maska[index]) > 0)
 			{
 				ile = byte((8 - index) * 23);
 
@@ -8736,7 +8797,7 @@ void create_struct_variable(string &zm, string &ety, int5 &mne, const bool head,
 	hlp = t_str[indeks].offset;
 	inc(indeks);
 
-	for (idx = indeks; idx < indeks + hlp - 1; ++idx)
+	for (idx = indeks; idx < indeks + hlp; ++idx)
 	{
 		txt = t_str[idx].labelName;
 
@@ -10587,9 +10648,7 @@ void get_maeData(string &zm, int &i, const char typ)
 					{
 						if (txt[j] != '*' && txt[j] != '+' && txt[j] != '-')
 						{
-							string err;
-							err[0] = txt[j];
-							show_error(zm, WARN_ILLEGAL_CHARACTER, err);
+							show_error(zm, WARN_ILLEGAL_CHARACTER, string(1, txt[j]));
 						}
 					}
 
@@ -10986,7 +11045,7 @@ bool str_to_float(const std::string_view& str, double& num, int *error_pos = nul
 	{
 		if (ret.ec != std::errc())
 		{
-			*error_pos = ret.ptr - str.data();
+			*error_pos = static_cast<int>(ret.ptr - str.data());
 		}
 	}
 	return ret.ec == std::errc();
@@ -11057,7 +11116,7 @@ void save_fl(string &a, string &old)
 			save_dst(BCD((n / 1000000) % 100));
 			save_dst(BCD((n / 10000) % 100));
 			save_dst(BCD((n / 100) % 100));
-			save_dst(BCD(n / 100));
+			save_dst(BCD(n % 100));
 
 			inc(addres, 6);             // we saved 6 bytes
 			return;
@@ -13364,7 +13423,7 @@ JUMP:
 
 					// if the passed parameter is between single quotes " ", it is a string
 					if (txt.empty() == false)
-						if ((txt[1-1] == '"') && (txt[length(txt)] == '"'))
+						if ((txt[1-1] == '"') && (txt[length(txt) - 1] == '"'))
 							txt = copy(txt, 2 - 1, length(txt) - 2);
 
 					_odd = High(par);
@@ -13869,7 +13928,7 @@ JUMP:
 				ety = "'";
 				ch = ',';
 
-				j = 1 - 1;                              // parameter counter
+				j = 1;                                  // parameter counter (1-based: par[0] holds count)
 				for (k = 0; k < High(par); ++k)
 				{
 					txt = par[k];
@@ -15202,7 +15261,7 @@ JUMP:
 
 					if (txt[length(txt) - 1] == '*')
 					{
-						for (j = 0; j < length(txt); ++j)
+						for (j = 0; j < length(txt) - 1; ++j)
 						{
 							switch (txt[j])
 							{
@@ -15463,7 +15522,10 @@ JUMP:
 						case 'R': regAXY_opty = (ch == '+'); break;
 						case 'S': v = opt_S; break;
 						case 'T': v = opt_T; break;
-						case '?': mae_labels = (ch == '+'); break;
+						case '?':
+						mae_labels = (ch == '+');
+						if (!mae_labels) local_name.clear();
+						break;
 						default:
 							show_error(zm, ERROR_INVALID_OPTION);
 					}
@@ -15671,7 +15733,7 @@ JUMP:
 							}
 
 							skip_spaces(i, zm);
-							if ((i <= length(zm)) && (zm[i] == ','))
+							if ((i < length(zm)) && (zm[i] == ','))
 							{
 								IncAndSkip(i, zm);
 
@@ -15741,7 +15803,7 @@ JUMP:
 						}
 					}
 
-					if ((addres != idx) or (_odd >= 0))
+					if ((addres != idx) or (_odd >= 0) or ((addres == idx) and ((opt & opt_O) == 0)))
 					{
 						save_hea();
 
@@ -17091,7 +17153,7 @@ JUMP:
 					}
 
 					k = -1;                                    // we check whether we already have this label
-					for (idx = static_cast<int>(t_seg.size()) - 1; idx >= 0; --idx)
+					for (idx = static_cast<int>(t_seg.size()) - 2; idx >= 1; --idx)
 					{
 						if (t_seg[idx].name == par[0])
 						{
@@ -17148,7 +17210,7 @@ JUMP:
 
 					if (pass == pass_end)                    // !!! necessarily !!!
 					{
-						for (k = static_cast<int>(t_seg.size()) - 1; k >= 0; --k)
+						for (k = static_cast<int>(t_seg.size()) - 2; k >= 1; --k)
 						{
 							if (k != idx)
 							{
@@ -17192,7 +17254,7 @@ JUMP:
 					txt = get_lab(i, zm, true);
 					k = -1;
 
-					for (idx = static_cast<int>(t_seg.size()) - 1; idx >= 0; --idx)
+					for (idx = static_cast<int>(t_seg.size()) - 2; idx >= 1; --idx)
 					{
 						if (t_seg[idx].name == txt)
 						{
@@ -17280,7 +17342,7 @@ JUMP:
 
 					if (pass == pass_end)
 					{
-						for (k = static_cast<int>(t_seg.size()) - 1; k >= 0; --k)
+						for (k = static_cast<int>(t_seg.size()) - 2; k >= 1; --k)
 						{
 							if (t_seg[k].bank == bank)
 							{
@@ -17708,21 +17770,6 @@ void analyze_file(string& a, string& old_str)
 			line = nr;
 			inc(line_all);
 
-			// DEBUG
-			//cout << (int)pass <<':'<< line << " " << zm << endl;
-			/*
-			if (pass == 1 && zm == "	org *+duch_size*4")
-			{
-				int a = 0;
-			}
-			*/
-			if (pass == 3 && line == 14)
-			{
-				int a = 0;
-			}
-			
-			// DEBUG
-
 			get_line(zm, end_file, ok, _odd, _doo, app, appLine);
 
 			if (ok && !app && appLine.empty() == false)
@@ -18137,7 +18184,7 @@ void RunAssembler(string& a)
 	}
 
 	if (pass > pass_max)
-		warning(WARN_INFINITE_LOOP_AT_LABEL);
+		show_error(a, WARN_INFINITE_LOOP_AT_LABEL);
 
 	// if no error occurred and we have 16 passes, there has definitely been an endless loop
 }
@@ -18325,13 +18372,23 @@ void initialize(int argc, char* argv[])
 						case 'C': case_used = true; break;
 						case 'P': full_name = true; break;
 						case 'S': silent = true; break;
-						case 'X': exclude_proc = true; break;
+						case 'X':
+						{
+							if (::toupper(t[_i + 1]) == 'P')
+							{
+								list_exclude_proc = true;
+								++_i;
+							}
+							else
+								exclude_proc = true;
+							break;
+						}
 						case 'U': unused_label = true; break;
 						case 'V':
 						{
 							if (::toupper(t[_i + 1]) == 'U')
 							{
-								_i += 2;
+								++_i;
 								VerifyProc = true;
 							}
 							break;

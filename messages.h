@@ -52,7 +52,7 @@ extern std::vector<std::string> mes;
 
 #define ERROR_MISSING_DOT_ENDR			43
 
-#define ERROR_SMB_LABEL_TOO_LONG		45
+#define ERROR_SMB_LABEL_TOO_LONG		44
 #define ERROR_TOO_MANY_BLOCKS			45
 #define WARN_BAD_PARAMETER_TYPE			46
 #define MSG_X_LINES_ASSEMBLED			48

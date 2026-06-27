@@ -149,10 +149,11 @@ std::vector<std::string> mes = {
 				"-t[:filename]\tGenerate \".lab\" labels file\r\n"
 				"-u\t\tDisplay warnings for unused labels\r\n"
 				"-vu\t\tVerify code inside unreferenced procedures\r\n"
-				"-x\t\tExclude unreferenced procedures from code generation",
+				"-x\t\tExclude unreferenced procedures from code generation\r\n"
+				"-xp\t\tDisplay warnings for unreferenced procedures",
 	/* 130 */   "",
 
 
-	/* 131 */	"mads 2.1.7", // version};
+	/* 131 */	"mads 2.1.8", // version};
 	/* 132 */	"Unable to delete file "
 };

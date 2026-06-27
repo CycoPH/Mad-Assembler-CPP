@@ -2,3 +2,6 @@
 bin/
 .build/
 *.user
+.claude/
+test-compare/
+EQUIVALENCE_REPORT.md
